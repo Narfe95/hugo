@@ -2,10 +2,12 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"log"
+
 	"github.com/getlantern/systray"
 	"github.com/getlantern/systray/example/icon"
 	"github.com/gotk3/gotk3/gtk"
-	"log"
 )
 
 var Window *gtk.Window
@@ -92,10 +94,69 @@ func onReady() {
 	systray.SetIcon(icon.Data)
 	systray.SetTitle("Awesome App")
 	systray.SetTooltip("Pretty awesome")
-	_ = systray.AddMenuItem("Quit", "Quit the whole app")
-	//go func() {
-	//	<-quitItem.ClickedCh
-	//}
+	mQuit := systray.AddMenuItem("Quit", "Quit the whole app")
+	mChange := systray.AddMenuItem("Change Me", "Change Me")
+	mChecked := systray.AddMenuItem("Unchecked", "Check Me")
+	mEnabled := systray.AddMenuItem("Enabled", "Enabled")
+	// Sets the icon of a menu item. Only available on Mac.
+	mEnabled.SetTemplateIcon(icon.Data, icon.Data)
+
+	systray.AddMenuItem("Ignored", "Ignored")
+
+	subMenuTop := systray.AddMenuItem("SubMenu", "SubMenu Test (top)")
+	subMenuMiddle := subMenuTop.AddSubMenuItem("SubMenu - Level 2", "SubMenu Test (middle)")
+	subMenuBottom := subMenuMiddle.AddSubMenuItem("SubMenu - Level 3", "SubMenu Test (bottom)")
+	subMenuBottom2 := subMenuMiddle.AddSubMenuItem("Panic!", "SubMenu Test (bottom)")
+
+	//mUrl := systray.AddMenuItem("Open UI", "my home")
+
+	systray.AddSeparator()
+	shown := true
+	toggle := func() {
+		if shown {
+			subMenuBottom.Check()
+			subMenuBottom2.Hide()
+			mQuit.Hide()
+			mEnabled.Hide()
+			shown = false
+		} else {
+			subMenuBottom.Uncheck()
+			subMenuBottom2.Show()
+			mQuit.Show()
+			mEnabled.Show()
+			shown = true
+		}
+	}
+
+	for {
+		select {
+		case <-mChange.ClickedCh:
+			mChange.SetTitle("I've Changed")
+		case <-mChecked.ClickedCh:
+			if mChecked.Checked() {
+				mChecked.Uncheck()
+				mChecked.SetTitle("Unchecked")
+			} else {
+				mChecked.Check()
+				mChecked.SetTitle("Checked")
+			}
+		case <-mEnabled.ClickedCh:
+			mEnabled.SetTitle("Disabled")
+			mEnabled.Disable()
+		//case <-mUrl.ClickedCh:
+		//	open.Run("https://www.getlantern.org")
+		case <-subMenuBottom2.ClickedCh:
+			panic("panic button pressed")
+		case <-subMenuBottom.ClickedCh:
+			toggle()
+		//case <-mToggle.ClickedCh:
+		//	toggle()
+		case <-mQuit.ClickedCh:
+			systray.Quit()
+			fmt.Println("Quit2 now...")
+			return
+		}
+	}
 }
 
 func onExit() {
