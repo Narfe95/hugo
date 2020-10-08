@@ -19,10 +19,26 @@ var window fyne.Window
 var label *widget.Label
 var button *widget.Button
 
+var mViewWindow *systray.MenuItem
+var mQuit *systray.MenuItem
+
+var winC chan bool
+
 func main() {
 	ParseFlags()
-	fyneWindow()
-	//systray.Run(onReady, onExit)
+	winC = make(chan bool)
+	run := true
+	go func() {
+		systray.Run(onReady, onExit)
+	}()
+	for run {
+		run := <-winC
+		if run {
+			fyneWindow()
+		} else {
+			systray.Quit()
+		}
+	}
 }
 
 func fyneWindow() {
@@ -56,23 +72,21 @@ func onReady() {
 	systray.SetTitle(applicationName)
 	systray.SetTooltip(applicationName)
 
-	mViewWindow := systray.AddMenuItem("Show window", "Show the program window")
+	mViewWindow = systray.AddMenuItem("Show window", "Show the program window")
 	systray.AddSeparator()
-	mQuit := systray.AddMenuItem("Quit", "Quit the whole app")
+	mQuit = systray.AddMenuItem("Quit", "Quit the whole app")
 
-	go func() {
-		for {
-			select {
-			case <-mViewWindow.ClickedCh:
-				fyneWindow()
-				log.Println("Opening main window")
-			case <-mQuit.ClickedCh:
-				systray.Quit()
-				log.Println("Quitting...")
-				return
-			}
+	for {
+		select {
+		case <-mViewWindow.ClickedCh:
+			log.Println("Opening main window")
+			winC <- true
+		case <-mQuit.ClickedCh:
+			log.Println("Quitting...")
+			winC <- false
+			return
 		}
-	}()
+	}
 }
 
 func getIcon(s string) []byte {
