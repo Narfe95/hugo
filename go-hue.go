@@ -1,70 +1,71 @@
 package main
 
 import (
-	"flag"
+	"bufio"
 	"fmt"
-	"fyne.io/fyne"
-	"fyne.io/fyne/app"
-	"fyne.io/fyne/widget"
+	"github.com/amimof/huego"
 	"github.com/getlantern/systray"
+	"github.com/nanobox-io/golang-scribble"
 	"io/ioutil"
 	"log"
+	"math/rand"
+	"os"
+	"time"
 )
 
+type Login struct {
+	Hostname string
+	User     string
+}
+
 var applicationName = "Go-hue!"
-var daemon bool
 
-var application fyne.App
-var window fyne.Window
-var label *widget.Label
-var button *widget.Button
-
-var mViewWindow *systray.MenuItem
 var mQuit *systray.MenuItem
-
-var winC chan bool
+var db *scribble.Driver
+var bridge *huego.Bridge
 
 func main() {
-	ParseFlags()
-	winC = make(chan bool)
-	run := true
-	go func() {
-		systray.Run(onReady, onExit)
-	}()
-	for run {
-		run := <-winC
-		if run {
-			fyneWindow()
-		} else {
-			systray.Quit()
-		}
+	db, err := scribble.New("./", nil)
+	if err != nil {
+		log.Println("A problem occurred when initializing scribble db: ", err)
+		return
 	}
-}
 
-func fyneWindow() {
-	// Create application
-	application = app.New()
-	// Create window from application
-	window = application.NewWindow(applicationName)
-	window.Resize(fyne.NewSize(400, 200))
-	// Create a label
-	label = widget.NewLabel("test")
+	login := Login{}
+	err = db.Read("hue", "login", &login)
+	if err != nil {
+		log.Println("An error occurred when reading the database ", err)
+	}
 
-	// Create a button
-	button = widget.NewButton("Testar", buttonOnClick)
+	if login == (Login{}) {
+		log.Printf("No user found in database. Creating new user.")
+		bridge, err := huego.Discover()
+		if err != nil {
+			log.Printf("Could not discover bridge: %v", err)
+			return
+		}
+		fmt.Printf("No user found, creating new. Please press the link button on top of the Hue bridge before pressing enter to continue.")
+		bufio.NewReader(os.Stdin).ReadBytes('\n')
+		rand.Seed(time.Now().UnixNano())
+		randSeed := rand.Intn(899999) + 100000
+		appUser := fmt.Sprintf("go-hue-%v", randSeed)
+		user, err := bridge.CreateUser(appUser)
+		if err != nil {
+			log.Printf("Unable to create user %v, %v", appUser, err)
+			return
+		}
+		bridge = bridge.Login(user)
+		err = db.Write("hue", "login", Login{Hostname: bridge.Host, User: bridge.User})
+		if err != nil {
+			log.Printf("Unable to write host information to file: %v", err)
+			return
+		}
+	} else {
+		bridge = huego.New(login.Hostname, login.User)
+	}
+	log.Printf("Logged into %v with username %v", bridge.Host, bridge.User)
 
-	// Set the window content to contain a vertical box which in turn contains the label the button
-	window.SetContent(widget.NewVBox(label, button))
-	window.ShowAndRun()
-}
-
-func buttonOnClick() {
-	label.SetText("asdf")
-}
-
-func ParseFlags() {
-	flag.BoolVar(&daemon, "d", false, "Daemonize instead of showing the full window.")
-	flag.Parse()
+	systray.Run(onReady, onExit)
 }
 
 func onReady() {
@@ -72,20 +73,40 @@ func onReady() {
 	systray.SetTitle(applicationName)
 	systray.SetTooltip(applicationName)
 
-	mViewWindow = systray.AddMenuItem("Show window", "Show the program window")
+	trayGroups := systray.AddMenuItem("Groups", "Show local groups of lamps")
+	trayLights := systray.AddMenuItem("Lights", "Show local lights")
+	var groupSubitems []*systray.MenuItem
+	var lightSubitems []*systray.MenuItem
+
+	groups, err := bridge.GetGroups()
+	if err != nil {
+		log.Printf("Could not get groups from bridge: %v", err)
+	}
+	for _, group := range groups {
+		groupSubitems = append(groupSubitems, trayGroups.AddSubMenuItem(group.Name, group.Name))
+	}
+
+	lights, err := bridge.GetLights()
+	if err != nil {
+		log.Printf("Could not get lights from bridge: %v", err)
+	}
+	for _, light := range lights {
+		lightSubitems = append(lightSubitems, trayLights.AddSubMenuItem(light.Name, light.Name))
+	}
+
 	systray.AddSeparator()
 	mQuit = systray.AddMenuItem("Quit", "Quit the whole app")
 
-	for {
-		select {
-		case <-mViewWindow.ClickedCh:
-			log.Println("Opening main window")
-			winC <- true
-		case <-mQuit.ClickedCh:
-			log.Println("Quitting...")
-			winC <- false
-			return
+	go func() {
+		for _, light := range lightSubitems {
+			<-light.ClickedCh
 		}
+	}()
+	for {
+
+		<-mQuit.ClickedCh
+		log.Println("Quitting...")
+		return
 	}
 }
 
