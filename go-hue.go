@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"github.com/amimof/huego"
 	"github.com/getlantern/systray"
@@ -24,24 +25,28 @@ var mQuit *systray.MenuItem
 var db *scribble.Driver
 var bridge *huego.Bridge
 
+var verbose bool
+
 func main() {
+	ParseFlags()
 	db, err := scribble.New("./", nil)
 	if err != nil {
-		log.Println("A problem occurred when initializing scribble db: ", err)
+		log.Fatalf("A problem occurred when initializing scribble db: ", err)
 		return
 	}
 
 	login := Login{}
 	err = db.Read("hue", "login", &login)
 	if err != nil {
-		log.Println("An error occurred when reading the database ", err)
+		log.Fatalf("An error occurred when reading the database ", err)
+		return
 	}
 
 	if login == (Login{}) {
 		log.Printf("No user found in database. Creating new user.")
 		bridge, err := huego.Discover()
 		if err != nil {
-			log.Printf("Could not discover bridge: %v", err)
+			log.Fatalf("Could not discover bridge: %v", err)
 			return
 		}
 		fmt.Printf("No user found, creating new. Please press the link button on top of the Hue bridge before pressing enter to continue.")
@@ -51,19 +56,21 @@ func main() {
 		appUser := fmt.Sprintf("go-hue-%v", randSeed)
 		user, err := bridge.CreateUser(appUser)
 		if err != nil {
-			log.Printf("Unable to create user %v, %v", appUser, err)
+			log.Fatalf("Unable to create user %v, %v", appUser, err)
 			return
 		}
 		bridge = bridge.Login(user)
 		err = db.Write("hue", "login", Login{Hostname: bridge.Host, User: bridge.User})
 		if err != nil {
-			log.Printf("Unable to write host information to file: %v", err)
+			log.Fatalf("Unable to write host information to file: %v", err)
 			return
 		}
 	} else {
 		bridge = huego.New(login.Hostname, login.User)
 	}
-	log.Printf("Logged into %v with username %v", bridge.Host, bridge.User)
+	if verbose {
+		log.Printf("Logged into %v with username %v", bridge.Host, bridge.User)
+	}
 
 	systray.Run(onReady, onExit)
 }
@@ -75,45 +82,70 @@ func onReady() {
 
 	trayGroups := systray.AddMenuItem("Groups", "Show local groups of lamps")
 	trayLights := systray.AddMenuItem("Lights", "Show local lights")
-	var groupSubitems []*systray.MenuItem
-	var lightSubitems []*systray.MenuItem
+	lightsChannel := make(chan huego.Light)
+	groupsChannel := make(chan huego.Group)
 
 	groups, err := bridge.GetGroups()
 	if err != nil {
-		log.Printf("Could not get groups from bridge: %v", err)
+		log.Fatalf("Could not get groups from bridge: %v", err)
+		return
 	}
-	for _, group := range groups {
-		groupSubitems = append(groupSubitems, trayGroups.AddSubMenuItem(group.Name, group.Name))
+	for i := 0; i < len(groups); i++ {
+		go func(i int) {
+			mGroup := trayGroups.AddSubMenuItem(groups[i].Name, groups[i].Name)
+			for {
+				<-mGroup.ClickedCh
+				groupsChannel <- groups[i]
+			}
+		}(i)
 	}
 
 	lights, err := bridge.GetLights()
 	if err != nil {
-		log.Printf("Could not get lights from bridge: %v", err)
+		log.Fatalf("Could not get lights from bridge: %v", err)
+		return
 	}
-	for _, light := range lights {
-		lightSubitems = append(lightSubitems, trayLights.AddSubMenuItem(light.Name, light.Name))
+	for i := 0; i < len(lights); i++ {
+		mLight := trayLights.AddSubMenuItem(lights[i].Name, lights[i].Name)
+		go func(i int) {
+			if lights[i].State.On {
+				mLight.Check()
+			}
+			for {
+				<-mLight.ClickedCh
+				lightsChannel <- lights[i]
+			}
+		}(i)
 	}
 
 	systray.AddSeparator()
 	mQuit = systray.AddMenuItem("Quit", "Quit the whole app")
 
 	go func() {
-		for _, light := range lightSubitems {
-			<-light.ClickedCh
+		for {
+			select {
+			case group := <-groupsChannel:
+				fmt.Printf("Group %v clicked.", group.Name)
+			case light := <-lightsChannel:
+				fmt.Printf("Light %v clicked.", light.Name)
+			case <-mQuit.ClickedCh:
+				log.Println("Quitting...")
+				systray.Quit()
+				return
+			}
 		}
 	}()
-	for {
+}
 
-		<-mQuit.ClickedCh
-		log.Println("Quitting...")
-		return
-	}
+func ParseFlags() {
+	flag.BoolVar(&verbose, "v", false, "Verbose")
+	flag.Parse()
 }
 
 func getIcon(s string) []byte {
 	b, err := ioutil.ReadFile(s)
 	if err != nil {
-		fmt.Print(err)
+		log.Fatalf("Could not read icon file: %v", err)
 	}
 	return b
 }
