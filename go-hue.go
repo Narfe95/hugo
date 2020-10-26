@@ -21,8 +21,6 @@ type Login struct {
 
 var applicationName = "Go-hue!"
 
-var mQuit *systray.MenuItem
-var db *scribble.Driver
 var bridge *huego.Bridge
 
 var verbose bool
@@ -31,14 +29,14 @@ func main() {
 	ParseFlags()
 	db, err := scribble.New("./", nil)
 	if err != nil {
-		log.Fatalf("A problem occurred when initializing scribble db: ", err)
+		log.Fatalf("A problem occurred when initializing scribble db: %v", err)
 		return
 	}
 
 	login := Login{}
 	err = db.Read("hue", "login", &login)
 	if err != nil {
-		log.Fatalf("An error occurred when reading the database ", err)
+		log.Fatalf("An error occurred when reading the database: %v", err)
 		return
 	}
 
@@ -50,7 +48,10 @@ func main() {
 			return
 		}
 		fmt.Printf("No user found, creating new. Please press the link button on top of the Hue bridge before pressing enter to continue.")
-		bufio.NewReader(os.Stdin).ReadBytes('\n')
+		_, err = bufio.NewReader(os.Stdin).ReadBytes('\n')
+		if err != nil {
+			log.Fatalf("An error occurred when reading input from stdin: %v", err)
+		}
 		rand.Seed(time.Now().UnixNano())
 		randSeed := rand.Intn(899999) + 100000
 		appUser := fmt.Sprintf("go-hue-%v", randSeed)
@@ -91,13 +92,13 @@ func onReady() {
 		return
 	}
 	for i := 0; i < len(groups); i++ {
-		go func(i int) {
-			mGroup := trayGroups.AddSubMenuItem(groups[i].Name, groups[i].Name)
+		mGroup := trayGroups.AddSubMenuItem(groups[i].Name, groups[i].Name)
+		go func(menuGroup *systray.MenuItem, group huego.Group) {
 			for {
-				<-mGroup.ClickedCh
-				groupsChannel <- groups[i]
+				<-menuGroup.ClickedCh
+				groupsChannel <- group
 			}
-		}(i)
+		}(mGroup, groups[i])
 	}
 
 	lights, err := bridge.GetLights()
@@ -107,19 +108,19 @@ func onReady() {
 	}
 	for i := 0; i < len(lights); i++ {
 		mLight := trayLights.AddSubMenuItem(lights[i].Name, lights[i].Name)
-		go func(i int) {
-			if lights[i].State.On {
-				mLight.Check()
+		go func(menuLight *systray.MenuItem, light huego.Light) {
+			if light.State.On {
+				menuLight.Check()
 			}
 			for {
-				<-mLight.ClickedCh
-				lightsChannel <- lights[i]
+				<-menuLight.ClickedCh
+				lightsChannel <- light
 			}
-		}(i)
+		}(mLight, lights[i])
 	}
 
 	systray.AddSeparator()
-	mQuit = systray.AddMenuItem("Quit", "Quit the whole app")
+	mQuit := systray.AddMenuItem("Quit", "Quit the whole app")
 
 	go func() {
 		for {
