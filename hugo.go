@@ -2,11 +2,12 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/adrg/xdg"
 	"github.com/amimof/huego"
 	"github.com/getlantern/systray"
-	"github.com/nanobox-io/golang-scribble"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -14,9 +15,9 @@ import (
 	"time"
 )
 
-type Login struct {
-	Hostname string
-	User     string
+type ConfigStruct struct {
+	Host string `json:"host"`
+	User string `json:"user"`
 }
 
 type Group struct {
@@ -30,53 +31,89 @@ var verbose bool
 
 func main() {
 	ParseFlags()
-	db, err := scribble.New("./", nil)
-	if err != nil {
-		log.Fatalf("A problem occurred when initializing scribble db: %v", err)
-		return
+
+	// Check if configuration directory exists and create it if not
+	configDir := xdg.ConfigHome + "/hugo"
+	configFile := configDir + "/hugo.json"
+	if _, err := os.Stat(configDir); os.IsNotExist(err) {
+		if verbose {
+			log.Println("Directory " + configDir + " not found. Creating it.")
+		}
+		err := os.Mkdir(configDir, 0700)
+		if err != nil {
+			log.Fatalf("Unable to create configuration directory: %v", err)
+		}
 	}
 
-	login := Login{}
-	err = db.Read("hue", "login", &login)
-	if err != nil {
-		log.Fatalf("An error occurred when reading the database: %v", err)
-		return
-	}
-
-	if login == (Login{}) {
-		log.Printf("No user found in database. Creating new user.")
-		bridge, err := huego.Discover()
+	// Try loading configuration from file
+	conf := ConfigStruct{}
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		bridge, err = createBridgeUser(configFile, conf)
 		if err != nil {
-			log.Fatalf("Could not discover bridge: %v", err)
-			return
-		}
-		fmt.Printf("No user found, creating new. Please press the link button on top of the Hue bridge before pressing enter to continue.")
-		_, err = bufio.NewReader(os.Stdin).ReadBytes('\n')
-		if err != nil {
-			log.Fatalf("An error occurred when reading input from stdin: %v", err)
-		}
-		rand.Seed(time.Now().UnixNano())
-		randSeed := rand.Intn(899999) + 100000
-		appUser := fmt.Sprintf("go-hue-%v", randSeed)
-		user, err := bridge.CreateUser(appUser)
-		if err != nil {
-			log.Fatalf("Unable to create user %v, %v", appUser, err)
-			return
-		}
-		bridge = bridge.Login(user)
-		err = db.Write("hue", "login", Login{Hostname: bridge.Host, User: bridge.User})
-		if err != nil {
-			log.Fatalf("Unable to write host information to file: %v", err)
-			return
+			log.Fatalf("Unable to create configuration file: %v", err)
 		}
 	} else {
-		bridge = huego.New(login.Hostname, login.User)
+		file, err := ioutil.ReadFile(configFile)
+		if err != nil {
+			log.Fatalf("Unable to read configuration file: %v", err)
+		}
+		err = json.Unmarshal(file, &conf)
+		if err != nil {
+			log.Fatalf("Unable to read configuration file: %v", err)
+		}
+
+		// TODO: Fix some validation to check if the values are valid
+		if conf.Host == "" && conf.User == "" {
+			bridge, err = createBridgeUser(configFile, conf)
+			if err != nil {
+				log.Fatalf("Unable to create configuration file: %v", err)
+			}
+		} else {
+			bridge = huego.New(conf.Host, conf.User)
+		}
 	}
+
 	if verbose {
 		log.Printf("Logged into %v with username %v", bridge.Host, bridge.User)
 	}
 
 	systray.Run(onReady, onExit)
+}
+
+func createBridgeUser(configFile string, config ConfigStruct) (*huego.Bridge, error) {
+	log.Printf("No application user found.")
+	bridge, err := huego.Discover()
+	if err != nil {
+		return bridge, err
+	}
+
+	fmt.Printf("Creating new user. Please press the link button on top of the Hue bridge before pressing enter to continue.")
+	_, err = bufio.NewReader(os.Stdin).ReadBytes('\n')
+	if err != nil {
+		return bridge, err
+	}
+	rand.Seed(time.Now().UnixNano())
+	randSeed := rand.Intn(899999) + 100000
+	appUser := fmt.Sprintf(applicationName+"-%v", randSeed)
+	user, err := bridge.CreateUser(appUser)
+	if err != nil {
+		return bridge, err
+	}
+
+	bridge = bridge.Login(user)
+
+	config.User = bridge.User
+	config.Host = bridge.Host
+	file, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return bridge, err
+	}
+	err = ioutil.WriteFile(configFile, file, 0600)
+	if err != nil {
+		return bridge, err
+	}
+
+	return bridge, nil
 }
 
 func onReady() {
