@@ -25,6 +25,11 @@ type Group struct {
 	menu  *systray.MenuItem
 }
 
+type Light struct {
+	light huego.Light
+	menu  *systray.MenuItem
+}
+
 var applicationName = "Hugo"
 var bridge *huego.Bridge
 var verbose bool
@@ -122,9 +127,9 @@ func onReady() {
 	systray.SetTooltip(applicationName)
 
 	// Disable systray groups until the library has support for it in linux
-	//trayGroups := systray.AddMenuItem("Groups", "Show local groups of lamps")
-	//trayLights := systray.AddMenuItem("Lights", "Show local lights")
-	//lightsChannel := make(chan huego.Light)
+	trayGroups := systray.AddMenuItem("Groups", "Show local groups of lamps")
+	trayLights := systray.AddMenuItem("Lights", "Show local lights")
+	lightsChannel := make(chan Light)
 	groupsChannel := make(chan Group)
 
 	groups, err := bridge.GetGroups()
@@ -133,8 +138,8 @@ func onReady() {
 		return
 	}
 	for i := 0; i < len(groups); i++ {
-		//mGroup := trayGroups.AddSubMenuItem(groups[i].Name, groups[i].Name)
-		mGroup := systray.AddMenuItem(groups[i].Name, groups[i].Name)
+		mGroup := trayGroups.AddSubMenuItem(groups[i].Name, groups[i].Name)
+		//mGroup := systray.AddMenuItem(groups[i].Name, groups[i].Name)
 		if groups[i].State.On {
 			mGroup.Check()
 		}
@@ -146,23 +151,23 @@ func onReady() {
 		}(mGroup, groups[i])
 	}
 
-	//lights, err := bridge.GetLights()
-	//if err != nil {
-	//	log.Fatalf("Could not get lights from bridge: %v", err)
-	//	return
-	//}
-	//for i := 0; i < len(lights); i++ {
-	//	mLight := trayLights.AddSubMenuItem(lights[i].Name, lights[i].Name)
-	//	go func(menuLight *systray.MenuItem, light huego.Light) {
-	//		if light.State.On {
-	//			menuLight.Check()
-	//		}
-	//		for {
-	//			<-menuLight.ClickedCh
-	//			lightsChannel <- light
-	//		}
-	//	}(mLight, lights[i])
-	//}
+	lights, err := bridge.GetLights()
+	if err != nil {
+		log.Fatalf("Could not get lights from bridge: %v", err)
+		return
+	}
+	for i := 0; i < len(lights); i++ {
+		mLight := trayLights.AddSubMenuItem(lights[i].Name, lights[i].Name)
+		go func(menuLight *systray.MenuItem, light huego.Light) {
+			if light.State.On {
+				menuLight.Check()
+			}
+			for {
+				<-menuLight.ClickedCh
+				lightsChannel <- Light{light, menuLight}
+			}
+		}(mLight, lights[i])
+	}
 
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit the whole app")
@@ -184,8 +189,20 @@ func onReady() {
 					}
 					group.menu.Check()
 				}
-			//case light := <-lightsChannel:
-			//	fmt.Printf("Light %v clicked.", light.Name)
+			case light := <-lightsChannel:
+				if light.light.State.On {
+					err := light.light.Off()
+					if err != nil {
+						log.Printf("Unable to set state of %v to off: %v", light.light.Name, err)
+					}
+					light.menu.Uncheck()
+				} else {
+					err := light.light.On()
+					if err != nil {
+						log.Printf("Unable to set state of %v to on: %v", light.light.Name, err)
+					}
+					light.menu.Check()
+				}
 			case <-mQuit.ClickedCh:
 				log.Println("Quitting...")
 				systray.Quit()
