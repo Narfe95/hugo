@@ -32,10 +32,15 @@ type Light struct {
 
 var applicationName = "Hugo"
 var bridge *huego.Bridge
-var verbose bool
+var verbose, version bool
 
 func main() {
 	ParseFlags()
+
+	if version {
+		fmt.Printf("hugo version 1.0")
+		os.Exit(0)
+	}
 
 	// Check if configuration directory exists and create it if not
 	configDir := xdg.ConfigHome + "/hugo"
@@ -139,7 +144,6 @@ func onReady() {
 	}
 	for i := 0; i < len(groups); i++ {
 		mGroup := trayGroups.AddSubMenuItem(groups[i].Name, groups[i].Name)
-		//mGroup := systray.AddMenuItem(groups[i].Name, groups[i].Name)
 		if groups[i].State.On {
 			mGroup.Check()
 		}
@@ -214,6 +218,7 @@ func onReady() {
 
 func ParseFlags() {
 	flag.BoolVar(&verbose, "v", false, "Verbose")
+	flag.BoolVar(&version, "V", false, "Print version and exit.")
 	flag.Parse()
 }
 
